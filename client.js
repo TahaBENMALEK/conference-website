@@ -1,19 +1,13 @@
-/**
- * Initializes and displays the local camera feed.
- * @throws {DOMException} If camera/microphone permissions are denied.
- */
-const localVideo = document.getElementById('localVideo');
+// Connect to Socket.IO server
+const socket = io('http://localhost:3000');
 
-async function initLocalStream() {
-  try {
-    const constraints = { video: true, audio: true };
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    localVideo.srcObject = stream;
-  } catch (err) {
-    console.error("Failed to access media devices:", err);
-    alert("Camera/mic access is required for ConfApp.");
-  }
-}
+// Log incoming messages
+socket.on('message', (data) => {
+  console.log('Received message:', data);
+});
 
-// Initialize on load
-initLocalStream();
+// Send test message every 2 seconds
+setInterval(() => {
+  const message = `Hello from ${socket.id} at ${new Date().toLocaleTimeString()}`;
+  socket.emit('message', message);
+}, 2000);
