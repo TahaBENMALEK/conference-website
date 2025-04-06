@@ -1,7 +1,6 @@
 const express = require('express');
 const http = require('http');
-const socketIo = require('socket.io');
-
+const socketIo = require('socket.io'); // Now properly installed
 // Initialize Express server
 const app = express();
 const server = http.createServer(app);

@@ -1,9 +1,11 @@
 /* Make the video element visible with proper dimensions */
-#localVideo {
+video {
   width: 640px;
   height: 480px;
   border: 1px solid #ccc;
   background-color: #f0f0f0;
+  text-align: center;
+  align-content: center;
 }
 h1 {
   color: #487ad6;
