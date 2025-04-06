@@ -1,7 +1,9 @@
+const { start } = require("repl");
+
 // Connect to Socket.IO server
 const socket = io('http://localhost:3000');
-let peerConnection;
 
+let peerConnection;
 //initialize WebRTC connection and start the call
 async function startCall() {
   const stream =localVideo.srcObject;
@@ -16,7 +18,7 @@ async function startCall() {
   });
   //handle incoming remote stream
   peerConnection.ontrack = (event) =>{
-    document.getElementById('remoteVideo').secObject=event.streams[0];
+    document.getElementById('remoteVideo').srcObject=event.streams[0];
   };
 
   // Exchange ICE candidates
@@ -60,3 +62,24 @@ setInterval(() => {
   const message = `Hello from ${socket.id} at ${new Date().toLocaleTimeString()}`;
   socket.emit('message', message);
 }, 2000);
+
+//Get control buttons
+const startBtn = document.getElementById('startBtn');
+const muteBtn = document.getElementById('muteBtn');
+const hangupBtn = document.getElementById('hangupBtn');
+//start call button handler
+startBtn.addEventListener('click', ()=>{
+  const audioTracks = localVideo.srcObject.getAudioTracks();
+  audioTracks.forEach(track => {
+    track.enabled = !track.enabled;
+    muteBtn.textContent = track.enabled ? 'Mute' : 'Unmute';
+  });
+})
+// Hangup button handler
+hangupBtn.addEventListener('click', () => {
+  if (peerConnection) {
+    peerConnection.close();
+    peerConnection = null;
+  }
+  window.location.reload();
+});
