@@ -10,7 +10,14 @@ async function startCall() {
   
   //Create peer connection with STUN server
   peerConnection = new RTCPeerConnection({
-    iceServers: [{ urls: 'stun:stun.l.google.com:19302'}]
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { 
+        urls: 'turn:your-turn-server.com',
+        username: 'user',
+        credential: 'password'
+      }
+    ]
   });
   //add localstream tracks to connectipn
   stream.getTracks().forEach(track => {
