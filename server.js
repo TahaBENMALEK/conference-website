@@ -25,6 +25,11 @@ io.on('connection', (socket) => {
   });
 });
 
+socket.on('chat-message', (data) => {
+  // Broadcast to all users
+  io.emit('chat-message', data);
+})
+
 // Start server on port 3000
 server.listen(3000, () => {
   console.log('Signaling server running on http://localhost:3000');

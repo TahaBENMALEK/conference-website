@@ -90,3 +90,33 @@ hangupBtn.addEventListener('click', () => {
   }
   window.location.reload();
 });
+
+// Chat functionality
+const chatInput = document.getElementById('chat-input');
+const sendBtn = document.getElementById('send-btn');
+const chatMessages = document.getElementById('chat-messages');
+
+// Send message
+function sendMessage() {
+  const message = chatInput.value;
+  if (message.trim()) {
+    socket.emit('chat-message', {
+      sender: socket.id.slice(0, 5), // Short ID
+      text: message
+    });
+    chatInput.value = '';
+  }
+}
+
+// Receive message
+socket.on('chat-message', (data) => {
+  const msgElement = document.createElement('div');
+  msgElement.innerHTML = `<strong>${data.sender}:</strong> ${data.text}`;
+  chatMessages.appendChild(msgElement);
+});
+
+// Event listeners
+sendBtn.addEventListener('click', sendMessage);
+chatInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') sendMessage();
+});
