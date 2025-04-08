@@ -11,17 +11,25 @@ app.use(express.static('public'));
 
 // Socket.IO connection handler
 io.on('connection', (socket) => {
-  console.log(`New connection: ${socket.id}`);
+  // Notify others about new user
+  socket.broadcast.emit('user-connected', socket.id);
 
-  // Relay messages to all other clients
-  socket.on('message', (data) => {
-    console.log(`Relaying message from ${socket.id}`);
-    socket.broadcast.emit('message', data);
+  // Relay WebRTC signals with target peer info
+  socket.on('offer', (data) => {
+    io.to(data.targetPeer).emit('offer', data);
   });
 
-  // Cleanup on disconnect
+  socket.on('answer', (data) => {
+    io.to(data.targetPeer).emit('answer', data);
+  });
+
+  socket.on('ice-candidate', (data) => {
+    io.to(data.targetPeer).emit('ice-candidate', data);
+  });
+
+  // Handle disconnects
   socket.on('disconnect', () => {
-    console.log(`Disconnected: ${socket.id}`);
+    socket.broadcast.emit('user-disconnected', socket.id);
   });
 });
 

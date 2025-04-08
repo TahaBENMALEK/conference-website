@@ -3,71 +3,114 @@ const { start } = require("repl");
 // Connect to Socket.IO server
 const socket = io('http://localhost:3000');
 
-let peerConnection;
-//initialize WebRTC connection and start the call
-async function startCall() {
-  const stream =localVideo.srcObject;
-  
-  //Create peer connection with STUN server
-  peerConnection = new RTCPeerConnection({
+// ================= MULTI-USER VIDEO =================
+let peers = {}; // Tracks all peer connections
+
+// Initialize a new peer connection
+function createPeerConnection(peerId) {
+  const pc = new RTCPeerConnection({
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { 
-        urls: 'turn:your-turn-server.com',
+        urls: 'turn:your-turn-server.com', // Replace with your TURN server
         username: 'user',
         credential: 'password'
       }
     ]
   });
-  //add localstream tracks to connectipn
-  stream.getTracks().forEach(track => {
-    peerConnection.addTrack(track, stream);
-  });
-  //handle incoming remote stream
-  peerConnection.ontrack = (event) =>{
-    document.getElementById('remoteVideo').srcObject=event.streams[0];
+
+  // Add local stream if available
+  if (localVideo.srcObject) {
+    localVideo.srcObject.getTracks().forEach(track => {
+      pc.addTrack(track, localVideo.srcObject);
+    });
+  }
+
+  // Handle remote stream
+  pc.ontrack = (event) => {
+    const remoteVideo = document.createElement('video');
+    remoteVideo.autoplay = true;
+    remoteVideo.playsinline = true;
+    remoteVideo.srcObject = event.streams[0];
+    remoteVideo.id = `remoteVideo-${peerId}`;
+    document.body.appendChild(remoteVideo);
   };
 
-  // Exchange ICE candidates
-  peerConnection.onicecandidate = (event) => {
+  // ICE candidate exchange
+  pc.onicecandidate = (event) => {
     if (event.candidate) {
-      socket.emit('ice-candidate', event.candidate);
+      socket.emit('ice-candidate', { 
+        targetPeer: peerId, 
+        candidate: event.candidate 
+      });
     }
   };
 
-  // Create and send offer
-  const offer = await peerConnection.createOffer();
-  await peerConnection.setLocalDescription(offer);
-  socket.emit('offer', offer);
+  return pc;
 }
 
-// Signaling handlers
-socket.on('offer', async (offer) => {
-  if (!peerConnection) startCall();
-  await peerConnection.setRemoteDescription(offer);
-  
-  const answer = await peerConnection.createAnswer();
-  await peerConnection.setLocalDescription(answer);
-  socket.emit('answer', answer);
+// ================= SIGNALING HANDLERS =================
+// When a new user joins
+socket.on('user-connected', (peerId) => {
+  if (peerId !== socket.id && !peers[peerId]) {
+    const pc = createPeerConnection(peerId);
+    peers[peerId] = pc;
+
+    pc.createOffer()
+      .then(offer => pc.setLocalDescription(offer))
+      .then(() => {
+        socket.emit('offer', {
+          targetPeer: peerId,
+          offer: pc.localDescription
+        });
+      });
+  }
 });
 
-socket.on('answer', async (answer) => {
-  await peerConnection.setRemoteDescription(answer);
+// When receiving an offer
+socket.on('offer', async ({ targetPeer, offer }) => {
+  if (!peers[targetPeer]) {
+    const pc = createPeerConnection(targetPeer);
+    peers[targetPeer] = pc;
+    await pc.setRemoteDescription(offer);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit('answer', { targetPeer, answer });
+  }
 });
 
-socket.on('ice-candidate', async (candidate) => {
-  await peerConnection.addIceCandidate(candidate);
+// When receiving an answer
+socket.on('answer', async ({ targetPeer, answer }) => {
+  if (peers[targetPeer]) {
+    await peers[targetPeer].setRemoteDescription(answer);
+  }
 });
 
-// Log incoming messages
+// ICE candidate handling
+socket.on('ice-candidate', async ({ targetPeer, candidate }) => {
+  if (peers[targetPeer]) {
+    await peers[targetPeer].addIceCandidate(candidate);
+  }
+});
+
+// Clean up disconnected peers
+socket.on('user-disconnected', (peerId) => {
+  if (peers[peerId]) {
+    peers[peerId].close();
+    delete peers[peerId];
+    const videoElem = document.getElementById(`remoteVideo-${peerId}`);
+    if (videoElem) videoElem.remove();
+  }
+});
+
+// ================= KEEP EXISTING CHAT CODE =================
+// (Your current chat implementation remains unchanged)
 socket.on('message', (data) => {
   console.log('Received message:', data);
 });
 
-// Send test message every 2 seconds
 setInterval(() => {
-  const message = `Hello from ${socket.id} at ${new Date().toLocaleTimeString()}`;
-  socket.emit('message', message);
+  socket.emit('message', `Hello from ${socket.id}`);
 }, 2000);
 
 //Get control buttons
