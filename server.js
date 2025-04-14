@@ -69,6 +69,11 @@ io.on('connection', (socket) => {
     console.log(`User disconnected: ${socket.id}`);
     socket.broadcast.emit('user-disconnected', socket.id);
   });
+
+  // Error handling for invalid events
+  socket.on('error', (err) => {
+    console.error(`Socket error from ${socket.id}:`, err);
+  });
 });
 
 // Home route
