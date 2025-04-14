@@ -1,4 +1,5 @@
 import React from 'react';
+import ErrorPage from './ErrorPage';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -18,14 +19,11 @@ class ErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="error-boundary">
-          <h1>Something went wrong.</h1>
-          <details style={{ whiteSpace: 'pre-wrap' }}>
-            {this.state.error && this.state.error.toString()}
-            <br />
-            {this.state.errorInfo?.componentStack}
-          </details>
-        </div>
+        <ErrorPage
+          type="UNKNOWN_ERROR"
+          details={this.state.error?.toString() || 'An unexpected error occurred.'}
+          onReset={() => this.setState({ hasError: false, error: null, errorInfo: null })}
+        />
       );
     }
 

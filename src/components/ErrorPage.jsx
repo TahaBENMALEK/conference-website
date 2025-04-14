@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { AlertTriangle, Camera, Wifi, Users, Server } from 'lucide-react';
 
 const ErrorPage = ({ type = 'UNKNOWN_ERROR', onReset, details = '' }) => {
@@ -43,13 +43,26 @@ const ErrorPage = ({ type = 'UNKNOWN_ERROR', onReset, details = '' }) => {
 
   const { title, description, icon, primaryAction, secondaryAction } = errorConfig[type] || errorConfig['UNKNOWN_ERROR'];
 
+  useEffect(() => {
+    let isMounted = true;
+
+    if (type === 'MEDIA_DENIED') {
+      navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+        .then(() => {
+          if (isMounted) onReset();
+        })
+        .catch(err => console.error('Still unable to access media devices:', err));
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [type, onReset]);
+
   const handlePrimaryAction = () => {
     // Handle primary action based on error type
     switch (type) {
       case 'MEDIA_DENIED':
-        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-          .then(() => onReset())
-          .catch(err => console.error('Still unable to access media devices:', err));
         break;
       case 'CONNECTION_FAILED':
       case 'PEER_DISCONNECTED':
