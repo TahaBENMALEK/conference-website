@@ -4,6 +4,13 @@ import { AlertTriangle, Camera, Wifi, Users, Server } from 'lucide-react';
 const ErrorPage = ({ type = 'UNKNOWN_ERROR', onReset, details = '' }) => {
   // Define error messages and actions for each error type
   const errorConfig = {
+    'MEDIA_PERMISSION_DENIED': {
+      title: 'Camera/Microphone Access Denied',
+      description: 'ConfApp needs access to your camera and microphone to join the conference. Please allow access in your browser settings and try again.',
+      icon: <Camera className="h-12 w-12 text-red-500" />,
+      primaryAction: 'Grant Access',
+      secondaryAction: 'Continue Without Media'
+    },
     'MEDIA_DENIED': {
       title: 'Camera/Microphone Access Denied',
       description: 'ConfApp needs access to your camera and microphone to join the conference. Please allow access in your browser settings and try again.',

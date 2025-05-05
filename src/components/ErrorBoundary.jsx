@@ -4,25 +4,43 @@ import ErrorPage from './ErrorPage';
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null, errorInfo: null };
+    this.state = { 
+      hasError: false,
+      error: null,
+      errorInfo: null
+    };
   }
 
   static getDerivedStateFromError(error) {
-    return { hasError: true, error };
+    return { hasError: true };
   }
 
   componentDidCatch(error, errorInfo) {
-    this.setState({ errorInfo });
-    console.error('Error caught by ErrorBoundary:', error, errorInfo);
+    this.setState({
+      error: error,
+      errorInfo: errorInfo
+    });
+    console.error("Error caught by ErrorBoundary:", error, errorInfo);
+  }
+
+  handleReset = () => {
+    this.setState({ 
+      hasError: false,
+      error: null,
+      errorInfo: null
+    });
   }
 
   render() {
     if (this.state.hasError) {
+      const errorDetails = this.state.error ? 
+        `${this.state.error.toString()}\n\n${this.state.errorInfo?.componentStack || ''}` : '';
+      
       return (
-        <ErrorPage
+        <ErrorPage 
           type="UNKNOWN_ERROR"
-          details={this.state.error?.toString() || 'An unexpected error occurred.'}
-          onReset={() => this.setState({ hasError: false, error: null, errorInfo: null })}
+          details={errorDetails}
+          onReset={this.handleReset}
         />
       );
     }
