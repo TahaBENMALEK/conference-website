@@ -1,210 +1,271 @@
-import React, { useState, useEffect } from 'react';
-import { io } from 'socket.io-client';
+import React, { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import Layout from './components/Layout';
+import JoinRoomView from './components/JoinRoomView';
 import ConferenceView from './components/ConferenceView';
-import ChatPanel from './components/ChatPanel';
-import UserList from './components/UserList';
 import SettingsPage from './components/SettingsPage';
-import ErrorBoundary from './components/ErrorBoundary';
-import ConnectionStatus from './components/ConnectionStatus';
-import { ToastProvider } from './components/ToastNotification';
-
-// Helper function to check media permissions without requesting them
-const checkMediaPermissions = async () => {
-  try {
-    // Get permission status if supported
-    if (navigator.permissions) {
-      const cameraPermission = await navigator.permissions.query({ name: 'camera' });
-      const microphonePermission = await navigator.permissions.query({ name: 'microphone' });
-      
-      return {
-        camera: cameraPermission.state,
-        microphone: microphonePermission.state
-      };
-    }
-    return { camera: 'unknown', microphone: 'unknown' };
-  } catch (err) {
-    console.warn('Permissions API not supported:', err);
-    return { camera: 'unknown', microphone: 'unknown' };
-  }
-};
+import ChatPanel from './components/ChatPanel';
+import ErrorPage from './components/ErrorPage';
+import UserList from './components/UserList';
+import './App.css';
 
 function App() {
   const [socket, setSocket] = useState(null);
   const [connected, setConnected] = useState(false);
   const [users, setUsers] = useState([]);
-  const [messages, setMessages] = useState([]);
-  const [userId, setUserId] = useState('');
-  const [currentRoom, setCurrentRoom] = useState('lobby'); // Default room
-  const [mediaPermissionState, setMediaPermissionState] = useState({
-    checked: false,
-    granted: false
+  const [user, setUser] = useState({
+    username: '',
+    roomId: ''
   });
 
-  // Add a function to check permissions without requesting them
-  const checkPermissions = async () => {
-    try {
-      const status = await checkMediaPermissions();
-      setMediaPermissionState({
-        checked: true,
-        granted: status.camera === 'granted' && status.microphone === 'granted'
-      });
-    } catch (err) {
-      console.warn('Could not check permission status:', err);
-      setMediaPermissionState({
-        checked: true,
-        granted: false
-      });
+  // Function to handle manual reconnection
+  const handleReconnect = useCallback(() => {
+    if (socket) {
+      console.log('Attempting manual reconnection...');
+      socket.disconnect();
+      setTimeout(() => {
+        socket.connect();
+      }, 1000);
     }
-  };
+  }, [socket]);
 
-  // Call this in a useEffect
+  // Initialize socket connection
   useEffect(() => {
-    checkPermissions();
-  }, []);
-
-  useEffect(() => {
-    // Initialize socket connection
-    const newSocket = io({
+    // Connect to server
+    const newSocket = io(process.env.REACT_APP_SOCKET_URL || 'http://localhost:3001', {
       reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      timeout: 10000
+      reconnectionDelay: 3000,
+      timeout: 20000,
+      transports: ['websocket'],
+      forceNew: true,
+      autoConnect: true
+    });
+
+    // Check initial connection state
+    setConnected(newSocket.connected);
+
+    newSocket.on('connection_established', (data) => {
+      console.log('Connection established with ID:', data.id);
+      setConnected(true);
+      
+      // Rejoin room if we were in one
+      if (user.roomId && user.username) {
+        newSocket.emit('join-room', { roomId: user.roomId, username: user.username }, (response) => {
+          if (response && response.success) {
+            console.log('Successfully rejoined room');
+            newSocket.emit('get-room-users', { roomId: user.roomId });
+          }
+        });
+      }
     });
     
-    setSocket(newSocket);
-
-    // Handle connection events
-    newSocket.on('connect', () => {
-      console.log('Socket connected:', newSocket.id);
-      setConnected(true);
-      setUserId(newSocket.id);
-      
-      // Join default room
-      newSocket.emit('join-room', currentRoom);
-    });
-
     newSocket.on('disconnect', () => {
-      console.log('Socket disconnected');
+      console.log('Disconnected from server');
       setConnected(false);
     });
-
-    newSocket.on('connect_error', (error) => {
-      console.error('Connection error:', error);
+    
+    newSocket.on('connect_error', (err) => {
+      console.error('Connection error:', err);
       setConnected(false);
+      
+      // Try to reconnect manually
+      setTimeout(() => {
+        console.log('Attempting manual reconnection...');
+        newSocket.connect();
+      }, 2000);
     });
 
-    // Handle user events
-    newSocket.on('user-connected', (id) => {
-      console.log('User connected:', id);
-      setUsers((prevUsers) => {
-        // Avoid duplicate users
-        if (prevUsers.some(user => user.id === id)) return prevUsers;
-        return [...prevUsers, { id, name: `User ${id.substring(0, 5)}` }];
+    // Handle room users updates
+    newSocket.on('room-users', (roomUsers) => {
+      console.log('Room users updated:', roomUsers);
+      setUsers(roomUsers);
+    });
+
+    newSocket.on('user-connected', (data) => {
+      console.log('User connected:', data);
+      setUsers(prev => {
+        // Only add if not already in the list
+        if (!prev.find(u => u.id === data.userId)) {
+          return [...prev, { id: data.userId, username: data.username, isConnected: true }];
+        }
+        return prev;
       });
     });
 
-    newSocket.on('user-disconnected', (id) => {
-      console.log('User disconnected:', id);
-      setUsers((prevUsers) => prevUsers.filter((user) => user.id !== id));
+    newSocket.on('user-disconnected', (userId) => {
+      console.log('User disconnected:', userId);
+      setUsers(prev => prev.filter(u => u.id !== userId));
     });
 
-    // Handle room users
-    newSocket.on('room-users', (userIds) => {
-      console.log('Room users:', userIds);
-      setUsers(userIds.map(id => ({ id, name: `User ${id.substring(0, 5)}` })));
-    });
+    // Add ping mechanism to verify connection
+    const pingInterval = setInterval(() => {
+      if (newSocket.connected) {
+        newSocket.emit('ping', (response) => {
+          if (response && response.time) {
+            setConnected(true);
+          }
+        });
+      }
+    }, 5000);
 
-    // Handle chat messages
-    newSocket.on('chat-message', (data) => {
-      console.log('Chat message received:', data);
-      setMessages((prevMessages) => [...prevMessages, data]);
-    });
-
+    setSocket(newSocket);
+    
     // Clean up on unmount
     return () => {
+      clearInterval(pingInterval);
       newSocket.disconnect();
     };
   }, []);
 
-  // Handle room changes
+  // Re-subscribe to room events when user info changes
   useEffect(() => {
-    if (socket && socket.connected) {
-      socket.emit('join-room', currentRoom);
+    if (socket && connected && user.roomId && user.username) {
+      // Request updated room users list
+      socket.emit('get-room-users', { roomId: user.roomId });
+      
+      // Setup periodic refresh of room users list to ensure sync
+      const refreshInterval = setInterval(() => {
+        if (socket.connected) {
+          socket.emit('get-room-users', { roomId: user.roomId });
+        }
+      }, 10000); // Refresh every 10 seconds
+      
+      return () => clearInterval(refreshInterval);
     }
-  }, [currentRoom, socket]);
+  }, [connected, user.roomId, user.username, socket]);
 
-  const sendMessage = (text) => {
-    if (socket && text.trim() !== '') {
-      const messageData = {
-        id: Date.now(),
-        text,
-        timestamp: new Date().toISOString(),
-        userId
-      };
-      
-      console.log('Sending message:', messageData);
-      socket.emit('chat-message', messageData);
-      
-      // Add own message to local state immediately for better UX
-      setMessages((prevMessages) => [
-        ...prevMessages, 
-        messageData
-      ]);
+  // Handle joining a room
+  const handleJoinRoom = (roomId, username) => {
+    console.log('Joining room with:', { roomId, username });
+    setUser({ username, roomId });
+    
+    if (socket) {
+      if (!socket.connected) {
+        console.warn('Socket not connected, attempting reconnect before joining room');
+        socket.connect();
+        
+        // Wait for connection before joining
+        socket.once('connect', () => {
+          socket.emit('join-room', { roomId, username });
+          setTimeout(() => {
+            socket.emit('get-room-users', { roomId });
+          }, 500);
+        });
+      } else {
+        socket.emit('join-room', { roomId, username });
+        
+        // Explicitly request room users after joining
+        setTimeout(() => {
+          socket.emit('get-room-users', { roomId });
+        }, 500);
+      }
     }
+  };
+
+  // Handle leaving a room
+  const handleLeaveRoom = () => {
+    console.log('Leaving room:', user);
+    
+    if (socket && socket.connected) {
+      socket.emit('leave-room');
+    }
+    
+    setUser({ username: '', roomId: '' });
+    setUsers([]); // Clear users list when leaving
+    return <Navigate to="/" />;
   };
 
   return (
     <Router>
-      <ToastProvider>
-        <ErrorBoundary>
-          <Layout>
-            <div className="flex flex-col md:flex-row h-full">
-              <div className="flex-grow overflow-hidden">
-                <Routes>
-                  <Route path="/" element={<Navigate to="/conference" replace />} />
-                  <Route 
-                    path="/conference" 
-                    element={
-                      <ConferenceView 
-                        socket={socket} 
-                        userId={userId}
-                        mediaPermissionState={mediaPermissionState}
-                        onCheckPermissions={checkPermissions}
-                      />
-                    } 
-                  />
-                  <Route 
-                    path="/chat" 
-                    element={
-                      <div className="h-full flex flex-col md:flex-row">
-                        <div className="flex-grow">
-                          <ChatPanel 
-                            messages={messages} 
-                            sendMessage={sendMessage} 
-                            userId={userId} 
-                          />
-                        </div>
-                        <div className="w-full md:w-64 shrink-0 border-l border-gray-200">
-                          <UserList users={users} />
-                        </div>
-                      </div>
-                    } 
-                  />
-                  <Route path="/settings" element={<SettingsPage />} />
-                  <Route path="/participants" element={
-                    <div className="p-4">
-                      <h1 className="text-2xl font-bold mb-4">Participants</h1>
-                      <UserList users={users} />
-                    </div>
-                  } />
-                </Routes>
-              </div>
-            </div>
-            <ConnectionStatus connected={connected} />
-          </Layout>
-        </ErrorBoundary>
-      </ToastProvider>
+      <Routes>
+        <Route path="/" element={
+          user.username && user.roomId ? (
+            <Navigate to="/conference" />
+          ) : (
+            <JoinRoomView 
+              onJoinRoom={handleJoinRoom} 
+              isConnected={connected}
+              onReconnect={handleReconnect}
+            />
+          )
+        } />
+        
+        <Route path="/conference" element={
+          user.username && user.roomId ? (
+            <Layout
+              isConnected={connected}
+              onReconnect={handleReconnect}
+            >
+              <ConferenceView
+                socket={socket}
+                username={user.username}
+                roomId={user.roomId}
+                onLeave={handleLeaveRoom}
+                isConnected={connected}
+              />
+            </Layout>
+          ) : (
+            <Navigate to="/" />
+          )
+        } />
+        <Route path="/chat" element={
+          user.username && user.roomId ? (
+            <Layout
+              isConnected={connected}
+              onReconnect={handleReconnect}
+            >
+              <ChatPanel 
+                socket={socket} 
+                username={user.username} 
+                isConnected={connected}
+              />
+            </Layout>
+          ) : (
+            <Navigate to="/" />
+          )
+        } />
+        
+        <Route path="/settings" element={
+          user.username && user.roomId ? (
+            <Layout
+              isConnected={connected}
+              onReconnect={handleReconnect}
+            >
+              <SettingsPage />
+            </Layout>
+          ) : (
+            <Navigate to="/" />
+          )
+        } />
+        <Route path="/participants" element={
+          user.username && user.roomId ? (
+            <Layout
+              isConnected={connected}
+              onReconnect={handleReconnect}
+            >
+              <UserList 
+                users={users} 
+                currentUserId={socket?.id} 
+              />
+            </Layout>
+          ) : (
+            <Navigate to="/" />
+          )
+        } />
+        
+        <Route path="/error" element={
+          <ErrorPage 
+            type="CONNECTION_FAILED" 
+            onReset={() => {
+              handleReconnect();
+              window.location.href = '/';
+            }} 
+          />
+        } />
+        
+        <Route path="*" element={<Navigate to="/" />} />
+      </Routes>
     </Router>
   );
 }
