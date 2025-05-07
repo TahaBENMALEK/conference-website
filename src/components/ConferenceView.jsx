@@ -1,140 +1,158 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { WebRTCManager } from '../WebRTCManager';
+import { WebRTCManager } from '../WebRTCManager.js';
 import { Mic, MicOff, Video, VideoOff, MessageSquare, Users, Settings, LogOut } from 'lucide-react';
-import ChatPanel from './ChatPanel';
-import UserList from './UserList';
+import ConnectionStatus from './ConnectionStatus';
+import VideoPanel from './VideoPanel';
+import SidebarPanel from './SidebarPanel';
 
-function ConferenceView({ socket, username, roomId, onLeave }) {
-  // State for video/audio streams and UI
+function ConferenceView({ socket, username, roomId, onLeave, isConnected }) {
+  const [webRTCManager, setWebRTCManager] = useState(null);
+  const [connectionStatus, setConnectionStatus] = useState({});
+  const [mediaError, setMediaError] = useState(null);
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const MAX_RECONNECT_ATTEMPTS = 3;
+
   const [localStream, setLocalStream] = useState(null);
   const [remoteStreams, setRemoteStreams] = useState({});
   const [isMicEnabled, setIsMicEnabled] = useState(true);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [isChatOpen, setIsChatOpen] = useState(false);
-  const [isUserListOpen, setIsUserListOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [sidebarActiveTab, setSidebarActiveTab] = useState('chat');
   const [participants, setParticipants] = useState([]);
+  const [socketConnected, setSocketConnected] = useState(false);
   
-  // Refs
   const localVideoRef = useRef(null);
-  const webRTCManagerRef = useRef(null);
 
-  // Initialize WebRTC and join room
+  // Handle remote stream when received from WebRTC
+  const handleRemoteStream = (userId, stream, username) => {
+    console.log(`Received remote stream from ${username || userId}`);
+    setRemoteStreams(prev => ({
+      ...prev,
+      [userId]: { stream, username }
+    }));
+  };
+
+  // Handle remote stream removed
+  const handleRemoteStreamRemoved = (userId) => {
+    console.log(`Remote stream removed for ${userId}`);
+    setRemoteStreams(prev => {
+      const updated = { ...prev };
+      delete updated[userId];
+      return updated;
+    });
+  };
+
   useEffect(() => {
-    if (!socket || !username || !roomId) {
-      setError('Missing required information to join the conference');
-      setIsLoading(false);
-      return;
-    }
+    if (!socket || !isConnected) return;
 
-    const startConference = async () => {
+    setSocketConnected(isConnected);
+
+    // Create WebRTCManager with proper callbacks
+    const manager = new WebRTCManager(
+      socket,
+      handleRemoteStream,
+      handleRemoteStreamRemoved
+    );
+    setWebRTCManager(manager);
+
+    const initializeWebRTC = async () => {
       try {
         setIsLoading(true);
-        setError(null);
+        // Use the init method instead of initialize
+        const stream = await manager.init(roomId, username);
         
-        // Create WebRTC manager and set up callbacks
-        const webRTCManager = new WebRTCManager(
-          socket,
-          // On remote stream added
-          (userId, stream, username) => {
-            setRemoteStreams(prev => ({
-              ...prev, 
-              [userId]: { stream, username }
-            }));
-          },
-          // On remote stream removed
-          (userId) => {
-            setRemoteStreams(prev => {
-              const newStreams = { ...prev };
-              delete newStreams[userId];
-              return newStreams;
-            });
+        if (stream) {
+          setLocalStream(stream);
+          // Set local video stream
+          if (localVideoRef.current) {
+            localVideoRef.current.srcObject = stream;
           }
-        );
-        
-        webRTCManagerRef.current = webRTCManager;
-        
-        // Initialize and get local stream
-        const stream = await webRTCManager.init(roomId, username);
-        setLocalStream(stream);
-        
-        // Set local video
-        if (localVideoRef.current && stream) {
-          localVideoRef.current.srcObject = stream;
-        }
-        
-        setIsLoading(false);
-      } catch (err) {
-        console.error('Failed to start conference:', err);
-        if (err.message === 'MEDIA_DENIED') {
-          setError('Failed to access media devices. Please check your permissions.');
         } else {
-          setError(err.message || 'Failed to join the conference');
+          console.warn('No media stream available');
         }
+        
+        setIsLoading(false);
+      } catch (error) {
+        console.error('WebRTC initialization error:', error);
+        setMediaError(error.message);
+        setError(error.message);
         setIsLoading(false);
       }
     };
 
-    startConference();
+    initializeWebRTC();
 
-    // Handle users in the room
-    const handleRoomUsers = (users) => {
+    // Socket connection status monitoring
+    const handleConnect = () => {
+      setSocketConnected(true);
+      console.log('Socket connected in ConferenceView');
+    };
+
+    const handleDisconnect = () => {
+      setSocketConnected(false);
+      console.log('Socket disconnected in ConferenceView');
+    };
+
+    socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
+
+    // Room participants handling
+    socket.on('room-users', (users) => {
+      console.log('Received room users:', users);
       setParticipants(users);
-    };
-
-    socket.on('room-users', handleRoomUsers);
-
-    // Handle user connected/disconnected
-    socket.on('user-connected', ({ userId, username }) => {
-      setParticipants(prev => [
-        ...prev,
-        { id: userId, username }
-      ]);
     });
 
-    socket.on('user-disconnected', (userId) => {
-      setParticipants(prev => prev.filter(user => user.id !== userId));
-    });
-
-    // Clean up on component unmount
     return () => {
-      if (webRTCManagerRef.current) {
-        webRTCManagerRef.current.disconnect();
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
+      socket.off('room-users');
+      if (manager) {
+        manager.disconnect();
       }
-      socket.off('room-users', handleRoomUsers);
-      socket.off('user-connected');
-      socket.off('user-disconnected');
     };
-  }, [socket, username, roomId]);
+  }, [socket, isConnected, roomId, username]);
 
-  // Toggle microphone
+  useEffect(() => {
+    // Update local video when stream changes
+    if (localStream && localVideoRef.current) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
+
   const toggleMicrophone = () => {
-    if (webRTCManagerRef.current) {
+    if (webRTCManager) {
       const newState = !isMicEnabled;
-      webRTCManagerRef.current.toggleAudio(newState);
+      webRTCManager.toggleAudio(newState);
       setIsMicEnabled(newState);
     }
   };
 
-  // Toggle camera
   const toggleCamera = () => {
-    if (webRTCManagerRef.current) {
+    if (webRTCManager) {
       const newState = !isVideoEnabled;
-      webRTCManagerRef.current.toggleVideo(newState);
+      webRTCManager.toggleVideo(newState);
       setIsVideoEnabled(newState);
     }
   };
 
-  // Handle leave conference
   const handleLeave = () => {
-    if (webRTCManagerRef.current) {
-      webRTCManagerRef.current.disconnect();
+    if (webRTCManager) {
+      webRTCManager.disconnect();
     }
     if (onLeave) onLeave();
   };
 
-  // Render loading state
+  const toggleSidebarTab = (tab) => {
+    if (sidebarActiveTab === tab && isSidebarOpen) {
+      setIsSidebarOpen(false);
+    } else {
+      setIsSidebarOpen(true);
+      setSidebarActiveTab(tab);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-50">
@@ -146,7 +164,6 @@ function ConferenceView({ socket, username, roomId, onLeave }) {
     );
   }
 
-  // Render error state
   if (error) {
     const isMediaError = error.includes('media devices');
     
@@ -188,7 +205,6 @@ function ConferenceView({ socket, username, roomId, onLeave }) {
 
   return (
     <div className="bg-gray-100 min-h-screen flex flex-col">
-      {/* Header */}
       <header className="bg-white shadow-sm p-3">
         <div className="flex justify-between items-center">
           <h1 className="text-lg font-semibold text-blue-600">
@@ -198,6 +214,7 @@ function ConferenceView({ socket, username, roomId, onLeave }) {
             <span className="text-sm text-gray-500 mr-2">
               Joined as: <span className="font-medium">{username}</span>
             </span>
+            <ConnectionStatus connected={socketConnected} socket={socket} />
             <button 
               onClick={handleLeave} 
               className="p-2 text-red-500 hover:bg-red-50 rounded-full transition-colors"
@@ -209,84 +226,28 @@ function ConferenceView({ socket, username, roomId, onLeave }) {
         </div>
       </header>
 
-      {/* Main content */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Video grid */}
-        <div className={`flex-1 p-3 ${isChatOpen || isUserListOpen ? 'lg:mr-80' : ''}`}>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {/* Local video */}
-            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-              <div className="relative aspect-video">
-                <video
-                  ref={localVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className={`w-full h-full object-cover ${!isVideoEnabled ? 'hidden' : ''}`}
-                />
-                {!isVideoEnabled && (
-                  <div className="absolute inset-0 bg-gray-200 flex items-center justify-center">
-                    <div className="w-16 h-16 rounded-full bg-blue-500 flex items-center justify-center text-white text-xl font-bold">
-                      {username.charAt(0).toUpperCase()}
-                    </div>
-                  </div>
-                )}
-                <div className="absolute bottom-2 left-2 text-sm bg-black bg-opacity-60 text-white px-2 py-1 rounded-md">
-                  {username} (You)
-                </div>
-              </div>
-            </div>
-
-            {/* Remote videos */}
-            {Object.entries(remoteStreams).map(([userId, { stream, username: remoteUsername }]) => (
-              <div key={userId} className="bg-white rounded-lg shadow-sm overflow-hidden">
-                <div className="relative aspect-video">
-                  <video
-                    autoPlay
-                    playsInline
-                    className="w-full h-full object-cover"
-                    srcObject={stream}
-                  />
-                  <div className="absolute bottom-2 left-2 text-sm bg-black bg-opacity-60 text-white px-2 py-1 rounded-md">
-                    {remoteUsername || `User ${userId.substring(0, 4)}`}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+      <div className="flex flex-1 overflow-hidden relative">
+        <div className={`flex-1 ${isSidebarOpen ? 'lg:mr-80' : ''}`}>
+          <VideoPanel 
+            localVideoRef={localVideoRef}
+            username={username}
+            isVideoEnabled={isVideoEnabled}
+            remoteStreams={remoteStreams}
+            participants={participants}
+            socketConnected={socketConnected}
+          />
         </div>
 
-        {/* Chat/Participants sidebar */}
-        <div 
-          className={`fixed right-0 top-0 bottom-0 w-80 bg-white shadow-lg border-l border-gray-200 z-10 transform transition-transform duration-300 ease-in-out ${
-            isChatOpen || isUserListOpen ? 'translate-x-0' : 'translate-x-full'
-          }`}
-        >
-          <div className="flex h-full flex-col">
-            <div className="flex border-b border-gray-200">
-              <button 
-                className={`flex-1 py-3 font-medium text-sm ${isChatOpen ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
-                onClick={() => { setIsChatOpen(true); setIsUserListOpen(false); }}
-              >
-                Chat
-              </button>
-              <button 
-                className={`flex-1 py-3 font-medium text-sm ${isUserListOpen ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
-                onClick={() => { setIsUserListOpen(true); setIsChatOpen(false); }}
-              >
-                Participants ({participants.length})
-              </button>
-            </div>
-            
-            <div className="flex-1 overflow-hidden">
-              {isChatOpen && <ChatPanel socket={socket} username={username} />}
-              {isUserListOpen && <UserList users={participants} />}
-            </div>
-          </div>
-        </div>
+        <SidebarPanel 
+          isOpen={isSidebarOpen}
+          activeTab={sidebarActiveTab}
+          socket={socket}
+          username={username}
+          participants={participants}
+          toggleTab={toggleSidebarTab}
+        />
       </div>
 
-      {/* Controls */}
       <div className="bg-white border-t border-gray-200 py-3 px-4">
         <div className="flex justify-center space-x-4">
           <button
@@ -304,15 +265,15 @@ function ConferenceView({ socket, username, roomId, onLeave }) {
             {isVideoEnabled ? <Video size={20} /> : <VideoOff size={20} />}
           </button>
           <button
-            onClick={() => { setIsChatOpen(!isChatOpen); setIsUserListOpen(false); }}
-            className={`p-3 rounded-full ${isChatOpen ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-600'}`}
+            onClick={() => toggleSidebarTab('chat')}
+            className={`p-3 rounded-full ${sidebarActiveTab === 'chat' && isSidebarOpen ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-600'}`}
             title="Toggle Chat"
           >
             <MessageSquare size={20} />
           </button>
           <button
-            onClick={() => { setIsUserListOpen(!isUserListOpen); setIsChatOpen(false); }}
-            className={`p-3 rounded-full ${isUserListOpen ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-600'}`}
+            onClick={() => toggleSidebarTab('users')}
+            className={`p-3 rounded-full ${sidebarActiveTab === 'users' && isSidebarOpen ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-600'}`}
             title="Toggle Participants"
           >
             <Users size={20} />
